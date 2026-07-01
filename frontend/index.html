@@ -775,7 +775,7 @@
                 .then(response => response.json())
                 .then(data => {
                     statusDot.className = 'status-dot';
-                    statusText.textContent = 'Connected ✅';
+                    statusText.textContent = '';
                     statusBadge.className = 'status-badge';
                     console.log('✅ Backend connected:', data);
                 })
