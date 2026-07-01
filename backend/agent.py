@@ -71,7 +71,7 @@ except Exception as e:
     logger.error(f"Failed to initialize client: {e}")
     client = None
 
-LLM_NAME = "openai/gpt-4.1-mini"
+LLM_NAME =  "deepseek/DeepSeek-V3-0324";
 ACTION_RE = re.compile(r"^Action: (\w+): (.*)$")
 
 # ============================================
