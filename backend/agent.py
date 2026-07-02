@@ -14,33 +14,32 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# Load .env (only used for local development; Railway injects real env vars)
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+client = OpenAI(
+    base_url="https://models.github.ai/inference",
+    api_key=GITHUB_TOKEN,
+    timeout=60.0,
+    max_retries=3,
+)
+
+llm_name = "openai/gpt-4.1-mini"
+
 app = FastAPI(title="AI Agent API")
 
-# ============================================
-# RATE LIMITING (protects your API key from abuse)
-# ============================================
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# ============================================
-# CORS - only allow your real frontend domains
-# ============================================
-# List every exact frontend URL you actually deploy to via env var.
-# Wildcards like "https://*.vercel.app" do NOT work with allow_origins,
-# so we use allow_origin_regex instead for Netlify preview URLs.
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -50,32 +49,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================
-# GITHUB MODELS CLIENT
-# ============================================
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-if not GITHUB_TOKEN:
-    logger.warning("GITHUB_TOKEN not set! Set it as an environment variable, never in code.")
 
-try:
-    client = OpenAI(
-        base_url="https://models.github.ai/inference",
-        api_key=GITHUB_TOKEN,
-        timeout=60.0,
-        max_retries=3,
-    )
-    logger.info("OpenAI-compatible client initialized")
-except Exception as e:
-    logger.error(f"Failed to initialize client: {e}")
-    client = None
-
-LLM_NAME = "openai/gpt-4.1-mini"
-ACTION_RE = re.compile(r"^Action: (\w+): (.*)$")
-
-# ============================================
-# AGENT CLASS
-# ============================================
-
+# ====================== AGENT (unchanged from your version) ======================
 
 class Agent:
     def __init__(self, system=""):
@@ -91,36 +66,27 @@ class Agent:
         return result
 
     def execute(self):
-        if client is None:
-            return "Error: AI client not initialized. Please check server configuration."
-        try:
-            response = client.chat.completions.create(
-                model=LLM_NAME,
-                temperature=0.0,
-                messages=self.messages,
-                max_tokens=1000,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Model API error: {type(e).__name__}: {e}", exc_info=True)
-            return "Error: something went wrong talking to the AI model."
+        response = client.chat.completions.create(
+            model=llm_name,
+            temperature=0.0,
+            messages=self.messages,
+            max_tokens=1000,
+        )
+        return response.choices[0].message.content
 
 
-# ============================================
-# TOOL FUNCTIONS
-# ============================================
+# ====================== TOOLS ======================
 
-# Safe calculator: parses the expression into an AST and only allows
-# numbers and basic math operators. No eval(), no arbitrary code execution.
+# Your original: return eval(what, {"__builtins__": {}})
+# That's still dangerous once this runs on the internet instead of your own
+# machine — {"__builtins__": {}} does NOT fully sandbox eval(), it can be
+# escaped (e.g. via ().__class__.__base__.__subclasses__() chains) to run
+# arbitrary code on your server. Same function name/signature, safe internals:
+
 _ALLOWED_OPERATORS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
-    ast.Mod: operator.mod,
-    ast.USub: operator.neg,
-    ast.UAdd: operator.pos,
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
+    ast.USub: operator.neg, ast.UAdd: operator.pos,
 }
 
 
@@ -143,14 +109,8 @@ def _safe_eval(node):
 
 
 def calculate(what):
-    try:
-        if len(what) > 200:
-            return "Calculation error: expression too long"
-        tree = ast.parse(what, mode="eval")
-        result = _safe_eval(tree.body)
-        return str(result)
-    except Exception as e:
-        return f"Calculation error: {str(e)}"
+    tree = ast.parse(what, mode="eval")
+    return _safe_eval(tree.body)
 
 
 def planet_mass(name):
@@ -158,49 +118,17 @@ def planet_mass(name):
         "Mercury": 0.33011, "Venus": 4.8675, "Earth": 5.972, "Mars": 0.64171,
         "Jupiter": 1898.19, "Saturn": 568.34, "Uranus": 86.813, "Neptune": 102.413,
     }
-    cleaned = name.strip().capitalize()
-    if cleaned not in masses:
+    name = name.strip().capitalize()
+    if name not in masses:
         return f"Planet '{name}' not found."
-    return f"{cleaned} has a mass of {masses[cleaned]} x 10^24 kg"
+    return f"{name} has a mass of {masses[name]} x 10^24 kg"
 
 
-def sum_planet_masses(planet_names):
-    masses = {
-        "mercury": 0.33011, "venus": 4.8675, "earth": 5.972,
-        "mars": 0.64171, "jupiter": 1898.19, "saturn": 568.34,
-        "uranus": 86.813, "neptune": 102.413,
-    }
-    names = [name.strip().lower() for name in planet_names.split(',')]
-    total = 0
-    found = []
-    missing = []
-    for name in names:
-        if name in masses:
-            total += masses[name]
-            found.append(name.capitalize())
-        else:
-            missing.append(name)
-    if not found:
-        return "No valid planets found."
-    result = f"Total mass: {total} x 10^24 kg"
-    if found:
-        result += f"\nIncluded: {', '.join(found)}"
-    if missing:
-        result += f"\nNot found: {', '.join(missing)}"
-    return result
+known_actions = {"calculate": calculate, "planet_mass": planet_mass}
 
+# ====================== PROMPT (unchanged from your version) ======================
 
-KNOWN_ACTIONS = {
-    "calculate": calculate,
-    "planet_mass": planet_mass,
-    "sum_masses": sum_planet_masses,
-}
-
-# ============================================
-# PROMPT
-# ============================================
-
-PROMPT = """
+prompt = """
 You run in a loop of Thought, Action, PAUSE, Observation.
 At the end of the loop you output an Answer.
 Use Thought to describe your thoughts about the question you have been asked.
@@ -215,36 +143,83 @@ Runs a calculation and returns the number - uses Python so be sure to use floati
 
 planet_mass:
 e.g. planet_mass: Earth
-Returns the mass of a planet in the solar system
-
-sum_masses:
-e.g. sum_masses: Earth, Mars
-Returns the total mass of multiple planets
+returns the mass of a planet in the solar system
 
 Example session:
 
 Question: What is the combined mass of Earth and Mars?
-Thought: I should use sum_masses to get the total.
-Action: sum_masses: Earth, Mars
+Thought: I should find the mass of each planet using planet_mass.
+Action: planet_mass: Earth
 PAUSE
 
-Observation: Total mass: 6.61371 x 10^24 kg
-Answer: The combined mass of Earth and Mars is 6.61371 x 10^24 kg.
+You will be called again with this:
+
+Observation: Earth has a mass of 5.972 x 10^24 kg
+
+You then output:
+
+Answer: Earth has a mass of 5.972 x 10^24 kg
+
+Next, call the agent again with:
+
+Action: planet_mass: Mars
+PAUSE
+
+Observation: Mars has a mass of 0.64171 x 10^24 kg
+
+You then output:
+
+Answer: Mars has a mass of 0.64171 x 10^24 kg
+
+Finally, calculate the combined mass.
+
+Action: calculate: 5.972 + 0.64171
+PAUSE
+
+Observation: The combined mass is 6.61371 x 10^24 kg
+
+Answer: The combined mass of Earth and Mars is 6.61371 x 10^24 kg
 """.strip()
 
-# ============================================
-# PYDANTIC MODEL (with input validation)
-# ============================================
+action_re = re.compile(r"^Action: (\w+): (.*)$")
 
+
+# ====================== YOUR query() LOOP, adapted for the web ======================
+# Same logic as your query()/query_interactive() functions: run the agent,
+# check for an Action line, execute the tool, feed the Observation back,
+# repeat until there's no more action or max_turns is hit.
+
+def run_agent(question, max_turns=10):
+    bot = Agent(prompt)
+    next_prompt = question
+    steps = []
+
+    for _ in range(max_turns):
+        result = bot(next_prompt)
+        actions = [action_re.match(a) for a in result.split("\n") if action_re.match(a)]
+
+        if not actions:
+            return result, steps
+
+        action, action_input = actions[0].groups()
+        if action not in known_actions:
+            return result, steps
+
+        try:
+            observation = known_actions[action](action_input)
+        except Exception as e:
+            observation = f"Error running {action}: {e}"
+
+        steps.append({"action": action, "input": action_input, "result": str(observation)})
+        next_prompt = f"Observation: {observation}"
+
+    return result, steps
+
+
+# ====================== WEB ENDPOINTS ======================
 
 class ChatPayload(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
-    history: list = []
-
-
-# ============================================
-# ENDPOINTS
-# ============================================
 
 
 @app.get("/")
@@ -255,63 +230,18 @@ async def root():
 @app.get("/api/test")
 @limiter.limit("10/minute")
 async def test(request: Request):
-    return {
-        "status": "success",
-        "message": "API is working!",
-        "tools": list(KNOWN_ACTIONS.keys()),
-    }
+    return {"status": "success", "message": "API is working!", "tools": list(known_actions.keys())}
 
 
 @app.post("/api/chat")
 @limiter.limit("10/minute")
 async def chat(payload: ChatPayload, request: Request):
     try:
-        logger.info(f"Received message of length {len(payload.message)}")
-
-        if client is None:
-            raise HTTPException(status_code=503, detail="AI service is not configured.")
-
-        agent = Agent(system=PROMPT)
-        result = agent(payload.message)
-
-        max_turns = 5
-        steps = []
-
-        for turn in range(max_turns):
-            actions = [ACTION_RE.match(a) for a in result.split("\n") if ACTION_RE.match(a)]
-            if not actions:
-                break
-
-            action, action_input = actions[0].groups()
-            if action not in KNOWN_ACTIONS:
-                logger.warning(f"Unknown action requested: {action}")
-                break
-
-            observation = KNOWN_ACTIONS[action](action_input)
-            steps.append({"action": action, "input": action_input, "result": observation})
-
-            next_prompt = f"Observation: {observation}"
-            result = agent(next_prompt)
-
-        clean_result = result
-        clean_result = re.sub(r'^Action:.*$\n?', '', clean_result, flags=re.MULTILINE)
-        clean_result = re.sub(r'^PAUSE$\n?', '', clean_result, flags=re.MULTILINE)
-        clean_result = re.sub(r'^Observation:.*$\n?', '', clean_result, flags=re.MULTILINE)
-        clean_result = re.sub(r'^Thought:.*$\n?', '', clean_result, flags=re.MULTILINE)
-        clean_result = re.sub(r'^Answer:\s*', '', clean_result, flags=re.MULTILINE)
-        clean_result = clean_result.strip()
-
-        return {
-            "response": clean_result or result.strip() or "I couldn't generate a response.",
-            "history": agent.messages,
-            "steps": steps,
-        }
-
-    except HTTPException:
-        raise
+        result, steps = run_agent(payload.message)
+        return {"response": result, "steps": steps}
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
+        logger.error(f"Model API error: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Something went wrong talking to the AI model.")
 
 
 if __name__ == "__main__":
