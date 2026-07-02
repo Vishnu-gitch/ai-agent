@@ -5,7 +5,6 @@ import operator
 import logging
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -58,20 +57,19 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 if not GITHUB_TOKEN:
     logger.warning("GITHUB_TOKEN not set! Set it as an environment variable, never in code.")
 
-http_client = httpx.Client(timeout=60.0, follow_redirects=True)
-
 try:
     client = OpenAI(
         base_url="https://models.github.ai/inference",
         api_key=GITHUB_TOKEN,
-        http_client=http_client,
+        timeout=60.0,
+        max_retries=3,
     )
     logger.info("OpenAI-compatible client initialized")
 except Exception as e:
     logger.error(f"Failed to initialize client: {e}")
     client = None
 
-LLM_NAME =  "deepseek/DeepSeek-V3-0324";
+LLM_NAME = "openai/gpt-4.1-mini"
 ACTION_RE = re.compile(r"^Action: (\w+): (.*)$")
 
 # ============================================
@@ -104,7 +102,7 @@ class Agent:
             )
             return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"Model API error: {e}")
+            logger.error(f"Model API error: {type(e).__name__}: {e}", exc_info=True)
             return "Error: something went wrong talking to the AI model."
 
 
