@@ -50,7 +50,7 @@ app.add_middleware(
 )
 
 
-# ====================== AGENT (unchanged from your version) ======================
+# ====================== AGENT (unchanged from original) ======================
 
 class Agent:
     def __init__(self, system=""):
@@ -77,11 +77,11 @@ class Agent:
 
 # ====================== TOOLS ======================
 
-# Your original: return eval(what, {"__builtins__": {}})
-# That's still dangerous once this runs on the internet instead of your own
-# machine — {"__builtins__": {}} does NOT fully sandbox eval(), it can be
-# escaped (e.g. via ().__class__.__base__.__subclasses__() chains) to run
-# arbitrary code on your server. Same function name/signature, safe internals:
+# Original: return eval(what, {"__builtins__": {}})
+# That is still dangerous once this runs on the internet instead of on a
+# personal machine -- {"__builtins__": {}} does NOT fully sandbox eval(), it
+# can be escaped (e.g. via ().__class__.__base__.__subclasses__() chains) to
+# run arbitrary code on the server. Same function name/signature, safe internals:
 
 _ALLOWED_OPERATORS = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
@@ -126,7 +126,7 @@ def planet_mass(name):
 
 known_actions = {"calculate": calculate, "planet_mass": planet_mass}
 
-# ====================== PROMPT (unchanged from your version) ======================
+# ====================== PROMPT (unchanged from original) ======================
 
 prompt = """
 You run in a loop of Thought, Action, PAUSE, Observation.
@@ -184,15 +184,16 @@ Answer: The combined mass of Earth and Mars is 6.61371 x 10^24 kg
 action_re = re.compile(r"^Action: (\w+): (.*)$")
 
 
-# ====================== YOUR query() LOOP, adapted for the web ======================
-# Same logic as your query()/query_interactive() functions: run the agent,
-# check for an Action line, execute the tool, feed the Observation back,
-# repeat until there's no more action or max_turns is hit.
+# ====================== query() LOOP, adapted for the web ======================
+# Same logic as the original query()/query_interactive() functions: run the
+# agent, check for an Action line, execute the tool, feed the Observation
+# back, repeat until there's no more action or max_turns is hit.
 
 def run_agent(question, max_turns=10):
     bot = Agent(prompt)
     next_prompt = question
     steps = []
+    result = ""
 
     for _ in range(max_turns):
         result = bot(next_prompt)
